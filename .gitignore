@@ -1,2 +1,4 @@
+*.ini
+!./DebugSettings.ini
+!./DefaultSettings.ini
 *.pyc
-/pictures/EyeFiLogo.jpg

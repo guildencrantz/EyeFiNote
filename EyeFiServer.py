@@ -26,15 +26,15 @@ import sys
 import os
 import socket
 import threading
-import StringIO
+from cStringIO import StringIO
 
 import hashlib
 import binascii
-import select 
+import select
 import tarfile
 
 import xml.sax
-from xml.sax.handler import ContentHandler 
+from xml.sax.handler import ContentHandler
 import xml.dom.minidom
 
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
@@ -46,12 +46,23 @@ import logging
 import optparse
 import ConfigParser
 
+from configobj import ConfigObj
+
 import subprocess
 import random
 import tempfile
 
 import EyeFiCrypto
 import EyeFiSOAPMessages
+
+from geeknote.oauth import GeekNoteAuth
+
+import binascii
+
+from evernote.api.client import EvernoteClient
+import evernote.edam.type.ttypes as EvernoteTypes
+
+import mimetypes
 
 """
 General Architecture Notes
@@ -87,8 +98,8 @@ optionsParser = optparse.OptionParser()
 # Eye Fi XML SAX ContentHandler
 class EyeFiContentHandler(ContentHandler):
 
-  # These are the element names that I want to parse out of the XML    
-  elementNamesToExtract = ["macaddress","cnonce","transfermode","transfermodetimestamp","fileid","filename","filesize","filesignature","credential"]  
+  # These are the element names that I want to parse out of the XML
+  elementNamesToExtract = ["macaddress","cnonce","transfermode","transfermodetimestamp","fileid","filename","filesize","filesignature","credential"]
 
   # For each of the element names I create a dictionary with the value to False
   elementsToExtract = {}
@@ -99,12 +110,12 @@ class EyeFiContentHandler(ContentHandler):
 
   def __init__(self):
     self.extractedElements = {}
-    
+
     for elementName in self.elementNamesToExtract:
         self.elementsToExtract[elementName] = False
-  
+
   def startElement(self, name, attributes):
-  
+
     # If the name of the element is a key in the dictionary elementsToExtract
     # set the value to True
     if name in self.elementsToExtract:
@@ -119,7 +130,7 @@ class EyeFiContentHandler(ContentHandler):
 
 
   def characters(self, content):
-  
+
     for elementName in self.elementsToExtract:
       if self.elementsToExtract[elementName] == True:
         self.extractedElements[elementName] = content
@@ -129,37 +140,38 @@ class EyeFiServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
 
   eyeFiConfiguration = ""
   serverNonce = ""
-  
-  def __init__(self, server_address, requestHandler, eyeFiConfiguration):
+
+  def __init__(self, server_address, requestHandler, eyeFiConfiguration, evernote):
     # Set EyeFiServer.eyeFiConfiguration to the configuration object that is passed in
     self.eyeFiConfiguration = eyeFiConfiguration
-    
+    self.evernote = evernote
+
     # Generate a nonce to be used by the server. The nonce should be very hard if not
-    # impossible to predict. The method used here is to MD5 hash a random number.    
+    # impossible to predict. The method used here is to MD5 hash a random number.
     m = hashlib.md5()
     m.update(str(random.random()))
     self.serverNonce = m.hexdigest()
 
     # Explicitly call the base class BaseHTTPServer.HTTPServer's __init__() method
-    BaseHTTPServer.HTTPServer.__init__(self,server_address, requestHandler)    
+    BaseHTTPServer.HTTPServer.__init__(self,server_address, requestHandler)
 
-  
+
   def server_bind(self):
 
-    BaseHTTPServer.HTTPServer.server_bind(self)    
+    BaseHTTPServer.HTTPServer.server_bind(self)
     self.socket.settimeout(None)
     self.run = True
 
-  def get_request(self):  
+  def get_request(self):
     while self.run:
       try:
         connection, address = self.socket.accept()
         eyeFiLogger.debug("Incoming connection from client %s" % address[0])
-        
+
         # Set the timeout of the socket to 60 seconds
         connection.settimeout(None)
         return (connection, address)
-        
+
       except socket.timeout:
         pass
 
@@ -169,7 +181,7 @@ class EyeFiServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
   def serve(self):
     while self.run:
       self.handle_request()
-  
+
   # Override the method finish_request() found in the BaseServer class to insert some debugging
   # output. This class can be found in the file SocketServer.py.
   def finish_request(self, request, client_address):
@@ -187,7 +199,8 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
 
   protocol_version = 'HTTP/1.1'
   sys_version = ""
-  server_version = "Eye-Fi Agent/2.0.4.0 (Windows XP SP2)"    
+  server_version = "Eye-Fi Agent/2.0.4.0 (Windows XP SP2)"
+  evernote = None
 
   def __init__(self, request, client_address, server):
     BaseHTTPRequestHandler.__init__(self, request, client_address, server)
@@ -195,7 +208,7 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
 
   def do_GET(self):
     eyeFiLogger.debug(self.command + " " + self.path + " " + self.request_version)
-    
+
     self.send_response(200)
     self.send_header('Content-type','text/html')
     # I should be sending a Content-Length header with HTTP/1.1 but I am being lazy
@@ -204,7 +217,7 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
     self.wfile.write(self.client_address)
     self.wfile.write(self.headers)
     self.close_connection = 0
-    
+
 
   def do_POST(self):
     eyeFiLogger.debug(self.command + " " + self.path + " " + self.request_version)
@@ -212,26 +225,26 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
     SOAPAction = ""
     contentLength = ""
 
-    # Loop through all the request headers and pick out ones that are relevant    
-    
+    # Loop through all the request headers and pick out ones that are relevant
+
     eyeFiLogger.debug("Headers received in POST request:")
     for headerName in self.headers.keys():
       for headerValue in self.headers.getheaders(headerName):
 
         if( headerName == "soapaction"):
           SOAPAction = headerValue
-        
+
         if( headerName == "content-length"):
           contentLength = int(headerValue)
 
         eyeFiLogger.debug(headerName + ": " + headerValue)
 
-    
+
     # Read contentLength bytes worth of data
     eyeFiLogger.debug("Attempting to read " + str(contentLength) + " bytes of data")
     postData = self.rfile.read(contentLength)
     eyeFiLogger.debug("Finished reading " + str(contentLength) + " bytes of data")
-    
+
     # To avoid logging the entire photograph only log postData that is under 2K
     if( contentLength <= 2048 ):
       eyeFiLogger.debug("postData: " + postData)
@@ -239,13 +252,13 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
     # TODO: Implement some kind of visual progress bar
     # bytesRead = 0
     # postData = ""
-    
+
     # while(bytesRead < contentLength):
     #  postData = postData + self.rfile.read(1)
     #   bytesRead = bytesRead + 1
-      
+
     #  if(bytesRead % 10000 == 0):
-    #    print "#",    
+    #    print "#",
 
 
     # Perform action based on path and SOAPAction
@@ -257,19 +270,19 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
       contentLength = len(response)
 
       eyeFiLogger.debug("StartSession response: " + response)
-            
+
       self.send_response(200)
-      self.send_header('Date', self.date_time_string())      
+      self.send_header('Date', self.date_time_string())
       self.send_header('Pragma','no-cache')
       self.send_header('Server','Eye-Fi Agent/2.0.4.0 (Windows XP SP2)')
-      self.send_header('Content-Type','text/xml; charset="utf-8"') 
+      self.send_header('Content-Type','text/xml; charset="utf-8"')
       self.send_header('Content-Length', contentLength)
       self.end_headers()
-      
+
       self.wfile.write(response)
       self.wfile.flush()
       self.handle_one_request()
-    
+
     # GetPhotoStatus allows the card to query if a photo has been uploaded
     # to the server yet
     if((self.path == "/api/soap/eyefilm/v1") and (SOAPAction == "\"urn:GetPhotoStatus\"")):
@@ -279,57 +292,57 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
       contentLength = len(response)
 
       eyeFiLogger.debug("GetPhotoStatus response: " + response)
-      
+
       self.send_response(200)
-      self.send_header('Date', self.date_time_string())      
+      self.send_header('Date', self.date_time_string())
       self.send_header('Pragma','no-cache')
       self.send_header('Server','Eye-Fi Agent/2.0.4.0 (Windows XP SP2)')
-      self.send_header('Content-Type','text/xml; charset="utf-8"') 
+      self.send_header('Content-Type','text/xml; charset="utf-8"')
       self.send_header('Content-Length', contentLength)
       self.end_headers()
-      
+
       self.wfile.write(response)
       self.wfile.flush()
 
-      
-    # If the URL is upload and there is no SOAPAction the card is ready to send a picture to me  
+
+    # If the URL is upload and there is no SOAPAction the card is ready to send a picture to me
     if((self.path == "/api/soap/eyefilm/v1/upload") and (SOAPAction == "")):
-      eyeFiLogger.debug("Got upload request")      
+      eyeFiLogger.debug("Got upload request")
       response = self.uploadPhoto(postData)
       contentLength = len(response)
 
       eyeFiLogger.debug("Upload response: " + response)
 
       self.send_response(200)
-      self.send_header('Date', self.date_time_string())      
+      self.send_header('Date', self.date_time_string())
       self.send_header('Pragma','no-cache')
       self.send_header('Server','Eye-Fi Agent/2.0.4.0 (Windows XP SP2)')
-      self.send_header('Content-Type','text/xml; charset="utf-8"') 
+      self.send_header('Content-Type','text/xml; charset="utf-8"')
       self.send_header('Content-Length', contentLength)
       self.end_headers()
-      
+
       self.wfile.write(response)
       self.wfile.flush()
 
     # If the URL is upload and SOAPAction is MarkLastPhotoInRoll
     if((self.path == "/api/soap/eyefilm/v1") and (SOAPAction == "\"urn:MarkLastPhotoInRoll\"")):
-      eyeFiLogger.debug("Got MarkLastPhotoInRoll request")      
+      eyeFiLogger.debug("Got MarkLastPhotoInRoll request")
       response = self.markLastPhotoInRoll(postData)
       contentLength = len(response)
-      
+
       eyeFiLogger.debug("MarkLastPhotoInRoll response: " + response)
       self.send_response(200)
-      self.send_header('Date', self.date_time_string())      
+      self.send_header('Date', self.date_time_string())
       self.send_header('Pragma','no-cache')
       self.send_header('Server','Eye-Fi Agent/2.0.4.0 (Windows XP SP2)')
-      self.send_header('Content-Type','text/xml; charset="utf-8"') 
+      self.send_header('Content-Type','text/xml; charset="utf-8"')
       self.send_header('Content-Length', contentLength)
-      self.send_header('Connection', 'Close')      
+      self.send_header('Connection', 'Close')
       self.end_headers()
-      
+
       self.wfile.write(response)
       self.wfile.flush()
-      
+
       eyeFiLogger.debug("Connection closed.")
 
 
@@ -339,11 +352,11 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
     doc = xml.dom.minidom.Document()
 
     SOAPElement = doc.createElementNS("http://schemas.xmlsoap.org/soap/envelope/","SOAP-ENV:Envelope")
-    SOAPElement.setAttribute("xmlns:SOAP-ENV","http://schemas.xmlsoap.org/soap/envelope/")    
+    SOAPElement.setAttribute("xmlns:SOAP-ENV","http://schemas.xmlsoap.org/soap/envelope/")
     SOAPBodyElement = doc.createElement("SOAP-ENV:Body")
 
     markLastPhotoInRollResponseElement = doc.createElement("MarkLastPhotoInRollResponse")
-    
+
     SOAPBodyElement.appendChild(markLastPhotoInRollResponseElement)
     SOAPElement.appendChild(SOAPBodyElement)
     doc.appendChild(SOAPElement)
@@ -352,31 +365,31 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
 
 
   # Handles receiving the actual photograph from the card.
-  # postData will most likely contain multipart binary post data that needs to be parsed 
+  # postData will most likely contain multipart binary post data that needs to be parsed
   def uploadPhoto(self,postData):
-    
+
     # Take the postData string and work with it as if it were a file object
-    postDataInMemoryFile = StringIO.StringIO(postData)
-    
+    postDataInMemoryFile = StringIO(postData)
+
     # Get the content-type header which looks something like this
-    # content-type: multipart/form-data; boundary=---------------------------02468ace13579bdfcafebabef00d    
+    # content-type: multipart/form-data; boundary=---------------------------02468ace13579bdfcafebabef00d
     contentTypeHeader = self.headers.getheaders('content-type').pop()
     eyeFiLogger.debug(contentTypeHeader)
-    
+
     # Extract the boundary parameter in the content-type header
     headerParameters = contentTypeHeader.split(";")
-    eyeFiLogger.debug(headerParameters)      
-    
+    eyeFiLogger.debug(headerParameters)
+
     boundary = headerParameters[1].split("=")
     boundary = boundary[1].strip()
-    eyeFiLogger.debug("Extracted boundary: " + boundary)          
-    
+    eyeFiLogger.debug("Extracted boundary: " + boundary)
+
     # eyeFiLogger.debug("uploadPhoto postData: " + postData)
-    
+
     # Parse the multipart/form-data
     form = cgi.parse_multipart(postDataInMemoryFile, {"boundary":boundary,"content-disposition":self.headers.getheaders('content-disposition')})
     eyeFiLogger.debug("Available multipart/form-data: " + str(form.keys()))
-    
+
     # Parse the SOAPENVELOPE using the EyeFiContentHandler()
     soapEnvelope = form['SOAPENVELOPE'][0]
     eyeFiLogger.debug("SOAPENVELOPE: " + soapEnvelope)
@@ -385,11 +398,10 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
 
     eyeFiLogger.debug("Extracted elements: " + str(handler.extractedElements))
 
-    
+
     # Write the newly uploaded file to memory
-    untrustedFile = StringIO.StringIO()
-    untrustedFile.write(form['FILENAME'][0])
-        
+    untrustedFile = StringIO(form['FILENAME'][0])
+
     # Perform an integrity check on the file before writing it out
     eyeFiCrypto = EyeFiCrypto.EyeFiCrypto()
     verifiedDigest = eyeFiCrypto.calculateIntegrityDigest(untrustedFile.getvalue(),
@@ -399,75 +411,91 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
     # Continue only if the digests match
     eyeFiLogger.debug("Comparing my digest [" + verifiedDigest + "] to card's digest [" + unverifiedDigest  + "].")
     if( verifiedDigest == unverifiedDigest ):
-    
+
       # Figure out where I am going to put this file
       if( 'DownloadLocation' in self.server.eyeFiConfiguration['Global'] ):
         downloadLocation = os.path.normpath(self.server.eyeFiConfiguration['Global']['DownloadLocation'])
-        tarFilePath = os.path.join(downloadLocation,handler.extractedElements["filename"])
       else:
         downloadLocation = os.path.join(os.curdir,"pictures")
-        tarFilePath = os.path.join(os.curdir,"pictures",handler.extractedElements["filename"])
-        
+
       # Check to see if the path exists, if it doesn't, create it
       if( os.path.exists(downloadLocation) == False ):
         eyeFiLogger.debug("Path " + downloadLocation + " does not exist. Creating it.")
         os.mkdir(downloadLocation)
-      
-      tarFile = open(tarFilePath,"wb")
-      eyeFiLogger.debug("Opened file " + tarFilePath + " for binary writing")
 
-      tarFile.write(untrustedFile.getvalue())
-      eyeFiLogger.debug("Wrote file " + tarFilePath)
-
-      tarFile.close()
-      eyeFiLogger.debug("Closed file " + tarFilePath)
-
-      eyeFiLogger.debug("Extracting TAR file " + tarFilePath)
-      imageTarfile = tarfile.open(tarFilePath)
-      imageNames = imageTarfile.getnames()     
-      imageTarfile.extractall(downloadLocation)
-
-      eyeFiLogger.debug("Closing TAR file " + tarFilePath)
+      eyeFiLogger.debug("Opening TAR file " + handler.extractedElements["filename"])
+      imageTarfile = tarfile.open(mode='r',fileobj=untrustedFile)
+      for imageInfo in imageTarfile.members:
+        # FIXME: Create Note and post to Evernote
+        image = imageTarfile.extractfile(imageInfo).read()
+        note = self.createNote(image, imageInfo)
+        eyeFiLogger.debug(imageInfo.name)
+      eyeFiLogger.debug("Closing TAR file " + handler.extractedElements["filename"])
       imageTarfile.close()
 
-      eyeFiLogger.debug("Deleting TAR file " + tarFilePath)
-      os.remove(tarFilePath)
-
-      # Run a command on the file if specified
-      if( 'ExecuteOnUpload' in self.server.eyeFiConfiguration['Global'] ):
-        command = self.server.eyeFiConfiguration['Global']['ExecuteOnUpload']
-        imagePath = os.path.join(downloadLocation,imageNames[0])      
-        eyeFiLogger.debug("Executing command \"" + command + " " + imagePath + "\"")
-        pid = subprocess.Popen([command, imagePath]).pid
-      
       responseElementText = "true"
-    else:   
+    else:
       eyeFiLogger.error("Digests do not match. Check UploadKey setting in .ini file.")
       responseElementText = "false"
-      
-    # Close the temporary string buffer   
-    untrustedFile.close()   
-        
+
+    # Close the temporary string buffer
+    untrustedFile.close()
+
     # Create the XML document to send back
     doc = xml.dom.minidom.Document()
 
     SOAPElement = doc.createElementNS("http://schemas.xmlsoap.org/soap/envelope/","SOAP-ENV:Envelope")
-    SOAPElement.setAttribute("xmlns:SOAP-ENV","http://schemas.xmlsoap.org/soap/envelope/")    
+    SOAPElement.setAttribute("xmlns:SOAP-ENV","http://schemas.xmlsoap.org/soap/envelope/")
     SOAPBodyElement = doc.createElement("SOAP-ENV:Body")
-    
+
     uploadPhotoResponseElement = doc.createElement("UploadPhotoResponse")
     successElement = doc.createElement("success")
     successElementText = doc.createTextNode(responseElementText)
 
     successElement.appendChild(successElementText)
     uploadPhotoResponseElement.appendChild(successElement)
-    
+
     SOAPBodyElement.appendChild(uploadPhotoResponseElement)
     SOAPElement.appendChild(SOAPBodyElement)
     doc.appendChild(SOAPElement)
 
     return doc.toxml(encoding="UTF-8")
-  
+
+  def createNote(self, image, imageInfo):
+    note = EvernoteTypes.Note()
+    note.title = imageInfo.name
+
+    attributes = EvernoteTypes.NoteAttributes()
+    attributes.source = 'EyeFiNote'
+    attributes.sourceApplication = 'http://guildencrantz.github.io/EyeFiNote/'
+    note.attributes = attributes
+
+    md5 = hashlib.md5()
+    md5.update(image)
+    digest = md5.digest()
+
+    data = EvernoteTypes.Data()
+    data.size = imageInfo.size
+    data.bodyHash = digest
+    data.body = image
+
+    resource = EvernoteTypes.Resource()
+    resource.mime = mimetypes.guess_type(imageInfo.name)[0]
+    resource.data = data
+
+    note.resources = [resource]
+
+    hash_hex = binascii.hexlify(digest)
+
+    note.content = '<?xml version="1.0" encoding="UTF-8"?>'
+    note.content += '<!DOCTYPE en-note SYSTEM ' \
+            '"http://xml.evernote.com/pub/enml2.dtd">'
+    note.content += '<en-note>'
+    note.content += '<en-media type="%s" hash="%s" />' % (resource.mime, hash_hex)
+    note.content += '</en-note>'
+
+    return self.server.evernote.get_note_store().createNote(note)
+
   # GetPhotoStatus allows the Eye-Fi card to query the server as to the current uploaded
   # status of a file. Even more important is that it authenticates the card to the server
   # by the use of the <credential> field. Essentially if the credential is correct the
@@ -475,28 +503,28 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
   def getPhotoStatus(self,postData):
     handler = EyeFiContentHandler()
     parser = xml.sax.parseString(postData,handler)
-   
+
     eyeFiLogger.debug("Extracted elements: " + str(handler.extractedElements))
-    
+
     # Calculate the credential string that I am expecting the card to send to me
     credentialString = handler.extractedElements["macaddress"] + self.server.eyeFiConfiguration['Card']['UploadKey'] + self.server.serverNonce;
     eyeFiLogger.debug("Concatenated credential string (pre MD5): " + credentialString)
-    
+
     binaryCredentialString = binascii.unhexlify(credentialString)
     m = hashlib.md5()
     m.update(binaryCredentialString)
     credential = m.hexdigest()
     eyeFiLogger.debug("Credential string I'm expecting from card: " + credential)
     eyeFiLogger.debug("Credential string I got from card: " + handler.extractedElements["credential"])
-          
+
 
     # Create the XML document to send back
     doc = xml.dom.minidom.Document()
 
     SOAPElement = doc.createElementNS("http://schemas.xmlsoap.org/soap/envelope/","SOAP-ENV:Envelope")
-    SOAPElement.setAttribute("xmlns:SOAP-ENV","http://schemas.xmlsoap.org/soap/envelope/")    
+    SOAPElement.setAttribute("xmlns:SOAP-ENV","http://schemas.xmlsoap.org/soap/envelope/")
     SOAPBodyElement = doc.createElement("SOAP-ENV:Body")
-    
+
     getPhotoStatusResponseElement = doc.createElement("GetPhotoStatusResponse")
     getPhotoStatusResponseElement.setAttribute("xmlns","http://localhost/api/soap/eyefilm")
 
@@ -507,54 +535,54 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
     fileidElement = doc.createElement("fileid")
     fileidElementText = doc.createTextNode("1")
     fileidElement.appendChild(fileidElementText)
-    
+
     offsetElement = doc.createElement("offset")
     offsetElementText = doc.createTextNode("0")
     offsetElement.appendChild(offsetElementText)
-    
+
     getPhotoStatusResponseElement.appendChild(fileidElement)
     getPhotoStatusResponseElement.appendChild(offsetElement)
-    
+
     SOAPBodyElement.appendChild(getPhotoStatusResponseElement)
-    
+
     SOAPElement.appendChild(SOAPBodyElement)
     doc.appendChild(SOAPElement)
 
     return doc.toxml(encoding="UTF-8")
-    
-     
-  def startSession(self, postData):  
+
+
+  def startSession(self, postData):
     eyeFiLogger.debug("Delegating the XML parsing of startSession postData to EyeFiContentHandler()")
     handler = EyeFiContentHandler()
     parser = xml.sax.parseString(postData,handler)
-    
+
     eyeFiLogger.debug("Extracted elements: " + str(handler.extractedElements))
-    
+
     # Retrieve it from C:\Documents and Settings\<User>\Application Data\Eye-Fi\Settings.xml
     eyeFiUploadKey = self.server.eyeFiConfiguration['Card']['UploadKey']
     eyeFiLogger.debug("Setting Eye-Fi upload key to " + eyeFiUploadKey)
-    
+
     credentialString = handler.extractedElements["macaddress"] + handler.extractedElements["cnonce"] + eyeFiUploadKey;
     eyeFiLogger.debug("Concatenated credential string (pre MD5): " + credentialString)
 
     # Return the binary data represented by the hexadecimal string
     # resulting in something that looks like "\x00\x18\x03\x04..."
     binaryCredentialString = binascii.unhexlify(credentialString)
-    
-    # Now MD5 hash the binary string    
+
+    # Now MD5 hash the binary string
     m = hashlib.md5()
     m.update(binaryCredentialString)
-    
+
     # Hex encode the hash to obtain the final credential string
     credential = m.hexdigest()
 
     # Create the XML document to send back
     doc = xml.dom.minidom.Document()
-    
+
     SOAPElement = doc.createElementNS("http://schemas.xmlsoap.org/soap/envelope/","SOAP-ENV:Envelope")
-    SOAPElement.setAttribute("xmlns:SOAP-ENV","http://schemas.xmlsoap.org/soap/envelope/")    
+    SOAPElement.setAttribute("xmlns:SOAP-ENV","http://schemas.xmlsoap.org/soap/envelope/")
     SOAPBodyElement = doc.createElement("SOAP-ENV:Body")
-    
+
 
     startSessionResponseElement = doc.createElement("StartSessionResponse")
     startSessionResponseElement.setAttribute("xmlns","http://localhost/api/soap/eyefilm")
@@ -562,11 +590,11 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
     credentialElement = doc.createElement("credential")
     credentialElementText = doc.createTextNode(credential)
     credentialElement.appendChild(credentialElementText)
-        
+
     snonceElement = doc.createElement("snonce")
     snonceElementText = doc.createTextNode(str(self.server.serverNonce))
     snonceElement.appendChild(snonceElementText)
-    
+
     transfermodeElement = doc.createElement("transfermode")
     transfermodeElementText = doc.createTextNode(handler.extractedElements["transfermode"])
     transfermodeElement.appendChild(transfermodeElementText)
@@ -587,7 +615,7 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
     startSessionResponseElement.appendChild(upsyncallowedElement)
 
     SOAPBodyElement.appendChild(startSessionResponseElement)
-    
+
     SOAPElement.appendChild(SOAPBodyElement)
     doc.appendChild(SOAPElement)
 
@@ -600,14 +628,14 @@ def setupLogging(eyeFiConfiguration):
 
   # Declare the main logger as a global
   global eyeFiLogger
-    
-  # Determine the log level 
+
+  # Determine the log level
   if(eyeFiConfiguration['Global']['LogLevel'] == 'DEBUG'):
     loglevel = logging.DEBUG
-    
+
   elif(eyeFiConfiguration['Global']['LogLevel'] == 'INFO'):
     loglevel = logging.INFO
-    
+
   elif(eyeFiConfiguration['Global']['LogLevel'] == 'WARNING'):
     loglevel = logging.WARNING
 
@@ -646,7 +674,6 @@ def setupLogging(eyeFiConfiguration):
   eyeFiLogger.addHandler(NullHandler())
 
 
-
 def commandLineOptions():
 
   optionsParser.add_option("-c", "--config", action="store", dest="configfile",
@@ -657,9 +684,6 @@ def commandLineOptions():
 # was passed into the program then this function is responsible for setting
 # defaults before returning the ConfigParser object
 def readConfigurationFile(options):
-  
-  # Use the configobj 3rd party module
-  from configobj import ConfigObj
 
   # Create a dictionary with default values
   defaultEyeFiConfiguration = { 'Global':
@@ -667,51 +691,65 @@ def readConfigurationFile(options):
                                            'LogLevel'  : 'INFO',
                                            'ConsoleOutput': 'True'}
                               }
-                              
+
   # Load the defaults into a configuration object
   eyeFiConfiguration = ConfigObj(defaultEyeFiConfiguration)
-  
+
   # If the configuration file parameter was given attempt to read the configuration file
   if( options.configfile != None ):
     eyeFiConfiguration.merge(ConfigObj(options.configfile))
+    eyeFiConfiguration.filename = options.configfile
   else:
     print "Warning: No configuration file specified! Run this server with the -h command."
-  
+
   # Return the entire ConfigParser object
   return eyeFiConfiguration
 
 
-  
+
 def main():
-  
   # Load the available command line options
   commandLineOptions()
-  
+
   # Parse the command line options
   (options, args) = optionsParser.parse_args()
-    
+
   # Read the configuration file
   eyeFiConfiguration = readConfigurationFile(options)
-        
+
   # Setup the logging that will be used for the rest of the program
   setupLogging(eyeFiConfiguration)
 
-  
+
   eyeFiLogger.debug("Command line options: " + str(options))
   eyeFiLogger.debug("eyeFiConfiguration: " + str(eyeFiConfiguration))
 
-    
+
+  if (not 'Evernote' in eyeFiConfiguration) or (not 'AuthToken' in eyeFiConfiguration['Evernote']) or (not eyeFiConfiguration['Evernote']['AuthToken']):
+    GNA = GeekNoteAuth()
+    authToken = GNA.getToken()
+    import geeknote.out
+    geeknote.out.preloader.stop() # Otherwise we get spammed with 'Getting Token...' for the rest of execution.
+    if not 'Evernote' in eyeFiConfiguration:
+      eyeFiConfiguration['Evernote'] = {}
+    eyeFiConfiguration['Evernote'].update({ 'AuthToken': authToken })
+    eyeFiConfiguration.write()
+  else:
+    authToken = eyeFiConfiguration['Evernote']['AuthToken']
+
+  evernote = EvernoteClient(token=authToken, sandbox=False)
+
   # This is the hostname and port which the server will listen
   # for requests. A blank hostname indicates all interfaces.
   server_address = ('', eyeFiConfiguration['Global'].as_int('ListenPort'))
-    
+
   try:
     # Create an instance of an HTTP server. Requests will be handled
     # by the class EyeFiRequestHandler
-    eyeFiServer = EyeFiServer(server_address, EyeFiRequestHandler, eyeFiConfiguration)
+    eyeFiServer = EyeFiServer(server_address, EyeFiRequestHandler, eyeFiConfiguration, evernote)
 
-    # Spawn a new thread for the server    
-    eyeFiServerThread = threading.Thread(group=None, target=eyeFiServer.serve, name="EyeFiServerThread")    
+    # Spawn a new thread for the server
+    eyeFiServerThread = threading.Thread(group=None, target=eyeFiServer.serve, name="EyeFiServerThread")
     eyeFiServerThread.daemon = True
     eyeFiServerThread.start()
 
@@ -720,18 +758,19 @@ def main():
 
     while(True):
       time.sleep(60)
-    
+
   except KeyboardInterrupt:
     eyeFiLogger.info("Eye-Fi server shutting down")
-    
+
     # It is possible that the signal arrives before the eyeFiServer variable is initialized
     if( "eyeFiServer" in locals() ):
       eyeFiServer.stop()
       eyeFiServer.socket.close()
-      
+
     eyeFiLogger.info("Eye-Fi server stopped")
-      
+
 
 if __name__ == '__main__':
     main()
 
+#vim: set ts=2 sw=2 sts=2 ai et :

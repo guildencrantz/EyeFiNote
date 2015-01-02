@@ -1,0 +1,6 @@
+[submodule "geeknote"]
+	path = geeknote
+	url = git@github.com:VitaliyRodnenko/geeknote.git
+[submodule "evernote"]
+	path = evernote
+	url = git@github.com:evernote/evernote-sdk-python.git
