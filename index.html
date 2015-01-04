@@ -1,80 +1,59 @@
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
-	"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<!DOCTYPE html>
+<html>
 
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
-<head>
-	<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+  <head>
+    <meta charset='utf-8'>
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <meta name="description" content="EyeFiNote : An open source Eye-Fi Server which automatically loads files into Evernote">
 
-	<title>zemmekkis/EyeFiServer @ GitHub</title>
-	
-	<style type="text/css">
-		body {
-  		margin-top: 1.0em;
-  		background-color: #704033;
-		  font-family: "helvetica"; 
-  		color: #ffffff;
-    }
-    #container {
-      margin: 0 auto;
-      width: 700px;
-    }
-		h1 { font-size: 3.8em; color: #8fbfcc; margin-bottom: 3px; }
-		h1 .small { font-size: 0.4em; }
-		h1 a { text-decoration: none }
-		h2 { font-size: 1.5em; color: #8fbfcc; }
-    h3 { text-align: center; color: #8fbfcc; }
-    a { color: #8fbfcc; }
-    .description { font-size: 1.2em; margin-bottom: 30px; margin-top: 30px; font-style: italic;}
-    .download { float: right; }
-		pre { background: #000; color: #fff; padding: 15px;}
-    hr { border: 0; width: 80%; border-bottom: 1px solid #aaa}
-    .footer { text-align:center; padding-top:30px; font-style: italic; }
-	</style>
-	
-</head>
+    <link rel="stylesheet" type="text/css" media="screen" href="stylesheets/stylesheet.css">
 
-<body>
-  <a href="http://github.com/zemmekkis/EyeFiServer"><img style="position: absolute; top: 0; right: 0; border: 0;" src="http://s3.amazonaws.com/github/ribbons/forkme_right_darkblue_121621.png" alt="Fork me on GitHub" /></a>
-  
-  <div id="container">
+    <title>EyeFiNote</title>
+  </head>
 
-    <div class="download">
-      <a href="http://github.com/zemmekkis/EyeFiServer/zipball/master">
-        <img border="0" width="90" src="http://github.com/images/modules/download/zip.png"></a>
-      <a href="http://github.com/zemmekkis/EyeFiServer/tarball/master">
-        <img border="0" width="90" src="http://github.com/images/modules/download/tar.png"></a>
-    </div>
-      
-    <h1><a href="http://github.com/zemmekkis/EyeFiServer">EyeFiServer</a> 
-      <span class="small">by <a href="http://github.com/zemmekkis">zemmekkis</a></span></h1>
+  <body>
 
-    <div class="description">
-      An open source Eye-Fi Server written in Python
+    <!-- HEADER -->
+    <div id="header_wrap" class="outer">
+        <header class="inner">
+          <a id="forkme_banner" href="https://github.com/guildencrantz/EyeFiNote">View on GitHub</a>
+
+          <h1 id="project_title">EyeFiNote</h1>
+          <h2 id="project_tagline">An open source Eye-Fi Server which automatically loads files into Evernote</h2>
+
+            <section id="downloads">
+              <a class="zip_download_link" href="https://github.com/guildencrantz/EyeFiNote/zipball/master">Download this project as a .zip file</a>
+              <a class="tar_download_link" href="https://github.com/guildencrantz/EyeFiNote/tarball/master">Download this project as a tar.gz file</a>
+            </section>
+        </header>
     </div>
 
-    <h2>Authors</h2>
-<p>Jeff Tchang (Jeff.Tchang@gmail.com)<br/><br/>      </p>
-<h2>Contact</h2>
-<p> (Jeff.Tchang@gmail.com)<br/>      </p>
+    <!-- MAIN CONTENT -->
+    <div id="main_content_wrap" class="outer">
+      <section id="main_content" class="inner">
+        <h2>
+<a id="eye-fi-to-evernote" class="anchor" href="#eye-fi-to-evernote" aria-hidden="true"><span class="octicon octicon-link"></span></a>Eye-Fi to Evernote</h2>
 
+<p>Now that Eyefi has discontinued support for automatically sending videos and images to Evernote without a subscription you can run this and when your Eyefi card is connected to the same network as the server running this project the images and videos will be automatically downloaded from the card and uploaded to Evernotte.</p>
 
-    <h2>Download</h2>
-    <p>
-      You can download this project in either
-      <a href="http://github.com/zemmekkis/EyeFiServer/zipball/master">zip</a> or
-      <a href="http://github.com/zemmekkis/EyeFiServer/tarball/master">tar</a> formats.
-    </p>
-    <p>You can also clone the project with <a href="http://git-scm.com">Git</a>
-      by running:
-      <pre>$ git clone git://github.com/zemmekkis/EyeFiServer</pre>
-    </p>
-      
-    <div class="footer">
-      get the source code on GitHub : <a href="http://github.com/zemmekkis/EyeFiServer">zemmekkis/EyeFiServer</a>
+<p><em>CAUTION</em> There are effectively no safeguards in this code. If something goes wrong the data could well be lost forever.</p>
+
+<h2>
+<a id="attributions" class="anchor" href="#attributions" aria-hidden="true"><span class="octicon octicon-link"></span></a>Attributions</h2>
+
+<p>I've rolled a simple modification <a href="http://github.com/zemmekkis/EyeFiServer">EyeFiServer</a> by @zemmekkis which will write the images into Evernote (currently relying on <a href="https://github.com/VitaliyRodnenko/geeknote">Geeknote</a>'s oAuth implementation to get an authorizattion token) rather than simply dumping them to the filesystem.</p>
+      </section>
     </div>
+
+    <!-- FOOTER  -->
+    <div id="footer_wrap" class="outer">
+      <footer class="inner">
+        <p class="copyright">EyeFiNote maintained by <a href="https://github.com/guildencrantz">guildencrantz</a></p>
+        <p>Published with <a href="http://pages.github.com">GitHub Pages</a></p>
+      </footer>
+    </div>
+
     
-  </div>
 
-  
-</body>
+  </body>
 </html>
